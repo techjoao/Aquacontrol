@@ -1,0 +1,260 @@
+
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_ILI9341.h>
+
+// Wi-Fi do simulador Wokwi
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASS = "";
+
+// MQTT
+const char* BROKER = "broker.hivemq.com";
+const int MQTT_PORT = 1883;
+
+const char* TOPICO_CMD =
+  "aquacontrol-demo-48291/cmd";
+const char* TOPICO_STATUS =
+  "aquacontrol-demo-48291/status";
+
+// LEDs
+const int LED_ABERTO = 18;
+const int LED_FECHADO = 19;
+
+// TFT ILI9341
+const int TFT_CS = 5;
+const int TFT_DC = 27;
+const int TFT_RST = 26;
+const int TFT_SCK = 14;
+const int TFT_MOSI = 13;
+const int TFT_MISO = 12;
+
+Adafruit_ILI9341 tft(
+  TFT_CS, TFT_DC, TFT_RST
+);
+
+WiFiClient wifi;
+PubSubClient mqtt(wifi);
+
+bool valvulaAberta = false;
+bool conectadoMQTT = false;
+
+unsigned long inicioIrrigacao = 0;
+unsigned long tempoAcumulado = 0;
+unsigned long ultimaTentativa = 0;
+unsigned long ultimaTela = 0;
+
+float umidade = 42.0;
+float vazao = 0.0;
+float consumoLitros = 0.0;
+
+void atualizarLEDs() {
+  digitalWrite(LED_ABERTO,
+               valvulaAberta ? HIGH : LOW);
+  digitalWrite(LED_FECHADO,
+               valvulaAberta ? LOW : HIGH);
+}
+
+unsigned long tempoTotal() {
+  if (valvulaAberta) {
+    return tempoAcumulado +
+      (millis() - inicioIrrigacao);
+  }
+  return tempoAcumulado;
+}
+
+void atualizarTela() {
+  tft.fillScreen(ILI9341_BLACK);
+
+  // Cabeçalho
+  tft.fillRect(0, 0, 320, 42, ILI9341_NAVY);
+  tft.setTextColor(ILI9341_CYAN);
+  tft.setTextSize(2);
+  tft.setCursor(10, 12);
+  tft.print("AquaControl");
+
+  // Estado da conexão
+  tft.setTextSize(1);
+  tft.setCursor(230, 16);
+  tft.setTextColor(
+    conectadoMQTT ? ILI9341_GREEN : ILI9341_RED
+  );
+  tft.print(conectadoMQTT ? "ONLINE" : "OFFLINE");
+
+  // Estado da válvula
+  tft.setTextSize(2);
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setCursor(10, 57);
+  tft.print("VALVULA:");
+
+  tft.setCursor(10, 83);
+  tft.setTextColor(
+    valvulaAberta ? ILI9341_GREEN : ILI9341_RED
+  );
+  tft.print(valvulaAberta ? "ABERTA" : "FECHADA");
+
+  // Umidade simulada
+  tft.setTextSize(2);
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setCursor(10, 122);
+  tft.print("Umidade:");
+
+  tft.setCursor(190, 122);
+  tft.setTextColor(ILI9341_YELLOW);
+  tft.print(umidade, 0);
+  tft.print("%");
+
+  // Barra de umidade
+  tft.drawRect(10, 150, 300, 15, ILI9341_WHITE);
+  int largura = (int)(umidade * 2.96);
+  tft.fillRect(12, 152, largura, 11, ILI9341_GREEN);
+
+  // Tempo
+  unsigned long segundos = tempoTotal() / 1000;
+  unsigned long minutos = segundos / 60;
+  segundos %= 60;
+
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setCursor(10, 184);
+  tft.print("Tempo: ");
+  if (minutos < 10) tft.print("0");
+  tft.print(minutos);
+  tft.print(":");
+  if (segundos < 10) tft.print("0");
+  tft.print(segundos);
+
+  // Consumo estimado
+  tft.setCursor(10, 215);
+  tft.print("Consumo: ");
+  tft.print(consumoLitros, 2);
+  tft.print(" L");
+
+  tft.setTextSize(1);
+  tft.setTextColor(ILI9341_LIGHTGREY);
+  tft.setCursor(10, 295);
+  tft.print("Valores de demonstracao");
+}
+
+void publicarEstado() {
+  if (mqtt.connected()) {
+    mqtt.publish(
+      TOPICO_STATUS,
+      valvulaAberta ? "ABERTA" : "FECHADA",
+      true
+    );
+  }
+
+  Serial.print("Valvula: ");
+  Serial.println(valvulaAberta ? "ABERTA" : "FECHADA");
+}
+
+void receberMensagem(
+  char* topic,
+  byte* payload,
+  unsigned int tamanho
+) {
+  if (String(topic) != TOPICO_CMD) return;
+
+  String comando;
+  for (unsigned int i = 0; i < tamanho; i++) {
+    comando += (char)payload[i];
+  }
+
+  comando.trim();
+  comando.toUpperCase();
+
+  if (comando == "ABRIR" && !valvulaAberta) {
+    valvulaAberta = true;
+    inicioIrrigacao = millis();
+    vazao = 2.0; // Vazao ficticia para demonstracao
+  }
+  else if (comando == "FECHAR" && valvulaAberta) {
+    tempoAcumulado += millis() - inicioIrrigacao;
+    valvulaAberta = false;
+    vazao = 0.0;
+  }
+  else {
+    return;
+  }
+
+  atualizarLEDs();
+  publicarEstado();
+  atualizarTela();
+}
+
+void conectarMQTT() {
+  if (mqtt.connected()) return;
+
+  String id = "AquaESP-" +
+    String((uint32_t)ESP.getEfuseMac(), HEX);
+
+  if (mqtt.connect(id.c_str())) {
+    conectadoMQTT = true;
+    mqtt.subscribe(TOPICO_CMD);
+    publicarEstado();
+    atualizarTela();
+  } else {
+    conectadoMQTT = false;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(LED_ABERTO, OUTPUT);
+  pinMode(LED_FECHADO, OUTPUT);
+  atualizarLEDs();
+
+  // Inicia TFT com SPI nos pinos escolhidos
+  SPI.begin(TFT_SCK, TFT_MISO, TFT_MOSI, TFT_CS);
+  tft.begin();
+  tft.setRotation(1);
+  atualizarTela();
+
+  WiFi.begin(WIFI_SSID, WIFI_PASS, 6);
+
+  Serial.print("Conectando ao Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(250);
+    Serial.print(".");
+  }
+
+  Serial.println("\nWi-Fi conectado!");
+
+  mqtt.setServer(BROKER, MQTT_PORT);
+  mqtt.setCallback(receberMensagem);
+  mqtt.setBufferSize(256);
+  mqtt.setKeepAlive(30);
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    conectadoMQTT = false;
+    delay(100);
+    return;
+  }
+
+  if (!mqtt.connected()) {
+    conectadoMQTT = false;
+
+    if (millis() - ultimaTentativa >= 3000) {
+      ultimaTentativa = millis();
+      conectarMQTT();
+    }
+  } else {
+    mqtt.loop();
+  }
+
+  // Atualiza o painel a cada segundo
+  if (millis() - ultimaTela >= 1000) {
+    ultimaTela = millis();
+
+    // Consumo ficticio: 2 litros por minuto
+    if (valvulaAberta) {
+      consumoLitros += 2.0 / 60.0;
+    }
+
+    atualizarTela();
+  }
+}
