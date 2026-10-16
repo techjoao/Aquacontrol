@@ -45,7 +45,7 @@ Atualmente, o projeto está em fase de prototipagem e simulação, utilizando o 
 
 🧪 Simulação
 
-O protótipo é desenvolvido no "Wokwi" (https://wokwi.com/), permitindo testar o comportamento do sistema antes da montagem física.
+O protótipo é desenvolvido no [Wokwi](https://wokwi.com/), permitindo testar o comportamento do sistema antes da montagem física.
 
 A comunicação MQTT utiliza o broker público HiveMQ. Essa configuração é destinada a testes e demonstrações; uma instalação real precisará de autenticação, controle de acesso e medidas adicionais de segurança.
 
