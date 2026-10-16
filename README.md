@@ -1,7 +1,6 @@
 # Aquacontrol
-Sistema de irrigação automática com ESP32
 
-💧 AquaControl — Sistema Inteligente de Irrigação
+# 💧 AquaControl — Sistema Inteligente de Irrigação
 
 O AquaControl é um projeto de irrigação automatizada que busca otimizar o uso da água por meio de controle remoto, monitoramento e automação. O sistema utiliza um ESP32 para controlar o acionamento de uma válvula e uma interface web para facilitar o gerenciamento da irrigação.
 
